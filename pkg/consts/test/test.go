@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega" //nolint:staticcheck // dot import is standard for Ginkgo test utilities
 	sdk "github.com/openshift-online/ocm-sdk-go"
 	slv1 "github.com/openshift-online/ocm-sdk-go/servicelogs/v1"
 	ocmagentv1alpha1 "github.com/openshift/ocm-agent-operator/api/v1alpha1"
@@ -39,8 +39,8 @@ var (
 	TestNotification     = ocmagentv1alpha1.Notification{
 		Name:         TestNotificationName,
 		Summary:      "test-summary [namespace: '${namespace}']",
-		ActiveDesc:   "test-active-desc [description: '${description}', overriden-key: '${overriden-key}', recursive-key: '${recursive-key}']",
-		ResolvedDesc: "test-resolved-desc [description: '${description}', overriden-key: '${overriden-key}']",
+		ActiveDesc:   "test-active-desc [description: '${description}', overridden-key: '${overridden-key}', recursive-key: '${recursive-key}']",
+		ResolvedDesc: "test-resolved-desc [description: '${description}', overridden-key: '${overridden-key}']",
 		Severity:     "test-severity",
 		ResendWait:   1,
 		LogType:      "test-type",
@@ -50,9 +50,9 @@ var (
 		},
 	}
 	ServiceLogSummary               = "test-summary [namespace: 'openshift-monitoring']"
-	ServiceLogActiveDesc            = "test-active-desc [description: 'alert-desc', overriden-key: 'label-value', recursive-key: '_${recursive-key}_']"
-	ServiceLogResolvedDesc          = "test-resolved-desc [description: 'alert-desc', overriden-key: 'label-value']"
-	ServiceLogFleetDesc             = "test-notification [description: 'alert-desc', overriden-key: 'label-value']"
+	ServiceLogActiveDesc            = "test-active-desc [description: 'alert-desc', overridden-key: 'label-value', recursive-key: '_${recursive-key}_']"
+	ServiceLogResolvedDesc          = "test-resolved-desc [description: 'alert-desc', overridden-key: 'label-value']"
+	ServiceLogFleetDesc             = "test-notification [description: 'alert-desc', overridden-key: 'label-value']"
 	NotificationWithoutResolvedBody = ocmagentv1alpha1.Notification{
 		Name:       TestNotificationName,
 		Summary:    "test-summary",
@@ -143,7 +143,7 @@ func NewFleetNotification() ocmagentv1alpha1.FleetNotification {
 	return ocmagentv1alpha1.FleetNotification{
 		Name:                TestNotificationName,
 		Summary:             "test-summary [namespace: '${namespace}']",
-		NotificationMessage: "test-notification [description: '${description}', overriden-key: '${overriden-key}']",
+		NotificationMessage: "test-notification [description: '${description}', overridden-key: '${overridden-key}']",
 		References: []ocmagentv1alpha1.NotificationReferenceType{
 			"http://some.awesome.com/reference",
 			"https://another.great.com/resource",
@@ -216,12 +216,12 @@ func NewTestAlert(resolved bool, fleet bool) template.Alert {
 			"openshift_io_alert_source":     "platform",
 			"prometheus":                    "openshift-monitoring/k8s",
 			"severity":                      "info",
-			"overriden-key":                 "label-value",
+			"overridden-key":                "label-value",
 		},
 		Annotations: map[string]string{
-			"description":   "alert-desc",
-			"overriden-key": "annotation-value",
-			"recursive-key": "_${recursive-key}_",
+			"description":    "alert-desc",
+			"overridden-key": "annotation-value",
+			"recursive-key":  "_${recursive-key}_",
 		},
 		StartsAt: time.Now(),
 		EndsAt:   time.Time{},
@@ -324,7 +324,7 @@ func CreateDefaultNotification(ctx context.Context, k8sClient crClient.Client, n
 					ResendWait:   24,
 					ResolvedDesc: `Your cluster's ElasticSearch deployment is detected as being at safe disk consumption levels and no additional action on this issue is required.`,
 					ActiveDesc:   `Your cluster requires you to take action as its ElasticSearch cluster logging deployment has been detected as reaching a high disk usage threshold.`,
-					Severity:     "Info",
+					Severity:     "Low",
 					Summary:      "ElasticSearch reaching disk capacity",
 				},
 				{
@@ -332,7 +332,7 @@ func CreateDefaultNotification(ctx context.Context, k8sClient crClient.Client, n
 					ResendWait:   24,
 					ResolvedDesc: `Parallel Alert1 has been resolved`,
 					ActiveDesc:   `Your cluster requires you to take action as Parallel Alert1 is firing.`,
-					Severity:     "Info",
+					Severity:     "Low",
 					Summary:      "Test Parallel Alert 1",
 				},
 				{
@@ -340,7 +340,7 @@ func CreateDefaultNotification(ctx context.Context, k8sClient crClient.Client, n
 					ResendWait:   24,
 					ResolvedDesc: `Parallel Alert2 has been resolved`,
 					ActiveDesc:   `Your cluster requires you to take action as Parallel Alert1 is firing.`,
-					Severity:     "Info",
+					Severity:     "Low",
 					Summary:      "Test Parallel Alert 2",
 				},
 			},
@@ -488,10 +488,16 @@ func GetServiceLogCount(ctx context.Context, clusterUUID string, ocmConnection *
 // CheckServiceLogCount verifies the service log count matches expectations
 func CheckServiceLogCount(ctx context.Context, clusterUUID string, preCount, expectedNew int, ocmConnection *sdk.Connection) {
 	expectedTotal := preCount + expectedNew
-	actualCount, err := GetServiceLogCount(ctx, clusterUUID, ocmConnection)
-	Expect(err).Should(BeNil(), "failed to get service log count")
-	Expect(actualCount).Should(Equal(expectedTotal),
-		fmt.Sprintf("Expected SL count: %d, Got SL count: %d", expectedTotal, actualCount))
+	Eventually(func() error {
+		actualCount, err := GetServiceLogCount(ctx, clusterUUID, ocmConnection)
+		if err != nil {
+			return err
+		}
+		if actualCount != expectedTotal {
+			return fmt.Errorf("expected SL count: %d, got SL count: %d", expectedTotal, actualCount)
+		}
+		return nil
+	}, "30s", "2s").Should(Succeed())
 }
 
 // CreateFleetAlert creates an alert payload for fleet mode

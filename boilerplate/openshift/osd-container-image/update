@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+set -e
+
+source $CONVENTION_ROOT/_lib/common.sh
+
+# No PRE
+[[ "$1" == "PRE" ]] && exit 0
+
+# Expect POST
+[[ "$1" == "POST" ]] || err "Got a parameter I don't understand: '$1'. Did the infrastructure change?"
+
+# Seed CodeRabbit configuration without overwriting repo customizations.
+if [[ ! -f "${REPO_ROOT}/.coderabbit.yaml" ]]; then
+	echo "Copying .coderabbit.yaml to your repository root."
+	cp "${HERE}/.coderabbit.yaml" "${REPO_ROOT}/.coderabbit.yaml"
+else
+	echo ".coderabbit.yaml already exists; leaving it unchanged."
+fi
+
+# Add OWNERS_ALIASES to $REPO_ROOT
+echo "Copying OWNERS_ALIASES to your repository root."
+cp ${HERE}/OWNERS_ALIASES $REPO_ROOT
+
+# Migrate renamed/removed aliases in OWNERS files (one-time migration)
+OWNERS_UPDATED=()
+NEEDS_REVIEW=()
+while IFS= read -r -d '' owners_file; do
+	changed=false
+	if grep -q 'srep-functional-leads' "${owners_file}"; then
+		echo "Renaming srep-functional-leads -> rosa-staff-engineers in ${owners_file}"
+		${SED?} -i 's/srep-functional-leads/rosa-staff-engineers/g' "${owners_file}"
+		changed=true
+	fi
+	if grep -q 'srep-architects' "${owners_file}"; then
+		echo "Renaming srep-architects -> hp-architects in ${owners_file}"
+		${SED?} -i 's/srep-architects/hp-architects/g' "${owners_file}"
+		changed=true
+	fi
+	for stale in srep-team-leads sre-group-leads; do
+		if grep -q "${stale}" "${owners_file}"; then
+			echo "Removing ${stale} from ${owners_file}"
+			${SED?} -i "/${stale}/d" "${owners_file}"
+			changed=true
+		fi
+	done
+	for stale in srep-functional-team-security srep-infra-cicd; do
+		if grep -q "${stale}" "${owners_file}"; then
+			echo "WARNING: Removing ${stale} from ${owners_file} (alias no longer exists, no direct replacement)"
+			${SED?} -i "/${stale}/d" "${owners_file}"
+			NEEDS_REVIEW+=("${owners_file}: ${stale} was removed with no replacement. Please add appropriate reviewers/approvers.")
+			changed=true
+		fi
+	done
+	if [[ "${changed}" == "true" ]]; then
+		if ! grep -qE "^\s*-\s+\S" "${owners_file}"; then
+			echo "Removing ${owners_file} (no owners remain after cleanup)"
+			rm "${owners_file}"
+		fi
+		OWNERS_UPDATED+=("${owners_file}")
+	fi
+done < <(find "${REPO_ROOT}" -name 'OWNERS' -not -path '*/.git/*' -not -path '*/boilerplate/*' -print0)
+
+if [[ ${#OWNERS_UPDATED[@]} -gt 0 ]]; then
+	echo ""
+	echo "====================="
+	echo "NOTICE: Boilerplate updated the following OWNERS files to migrate stale aliases:"
+	for f in "${OWNERS_UPDATED[@]}"; do
+		echo "  - ${f}"
+	done
+	echo ""
+	echo "Please review these files to ensure the changes are correct."
+	if [[ ${#NEEDS_REVIEW[@]} -gt 0 ]]; then
+		echo ""
+		echo "ACTION REQUIRED:"
+		for msg in "${NEEDS_REVIEW[@]}"; do
+			echo "  - ${msg}"
+		done
+	fi
+	echo "====================="
+fi
+
+# Remove Dependabot config previously shipped by boilerplate.
+# Konflux MintMaker owns dependency updates for operators; Dependabot duplicates that.
+TARGET_FILE="${REPO_ROOT}/.github/dependabot.yml"
+if [[ -f "$TARGET_FILE" ]]; then
+  if grep -q '# BEGIN boilerplate-managed' "$TARGET_FILE"; then
+    echo "Removing boilerplate-managed .github/dependabot.yml (Konflux/MintMaker owns dependency updates)"
+    rm -f "$TARGET_FILE"
+  elif grep -qE 'package-ecosystem:[[:space:]]*"docker"' "$TARGET_FILE" \
+    && grep -q 'directory: "/build"' "$TARGET_FILE" \
+    && ! grep -qE 'package-ecosystem:[[:space:]]*("gomod"|gomod|"github-actions"|github-actions|"npm"|npm|"pip"|pip)' "$TARGET_FILE"; then
+    echo "Removing legacy boilerplate docker Dependabot config from .github/dependabot.yml"
+    rm -f "$TARGET_FILE"
+  else
+    echo "[WARNING] .github/dependabot.yml exists and may contain non-boilerplate config; not removing automatically."
+    echo "[WARNING] Review and remove Dependabot entries that duplicate Konflux/MintMaker if appropriate."
+  fi
+fi
+
+echo "Writing .ci-operator.yaml in your repository root with:"
+echo "    namespace: $IMAGE_NAMESPACE"
+echo "    name: $IMAGE_NAME"
+echo "    tag: $LATEST_IMAGE_TAG"
+${SED?} "s/__NAMESPACE__/$IMAGE_NAMESPACE/; s/__NAME__/$IMAGE_NAME/; s/__TAG__/$LATEST_IMAGE_TAG/" ${HERE}/.ci-operator.yaml > $REPO_ROOT/.ci-operator.yaml
+
+cat <<'EOF'
+
+=====================
+THINGS YOU NEED TO DO
+=====================
+- Make sure the following line is in your base Makefile:
+
+include boilerplate/generated-includes.mk
+
+- Remove any other 'include' lines, unless they're for things truly
+  unique to your repository. (Otherwise, consider proposing them to
+  boilerplate.)
+
+- Delete any obsolete files you're no longer including.
+
+- Define a `make test` target for Prow
+
+- Have a Dockerfile in ./build/Dockerfile and define IMAGE_NAME for it.
+  Others container images can be specified with ADDITIONAL_IMAGE_SPECS
+
+=====================
+
+EOF

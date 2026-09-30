@@ -1,4 +1,4 @@
-FROM quay.io/redhat-services-prod/openshift/boilerplate:image-v8.3.4 AS builder
+FROM quay.io/redhat-services-prod/openshift/boilerplate:image-v8.4.4 AS builder
 
 RUN mkdir -p /workdir
 WORKDIR /workdir
@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN make build
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7-1773939694
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1789639776
 
 LABEL io.openshift.managed.name="ocm-agent" \
   io.openshift.managed.description="Agent to interact with OCM on managed clusters"
